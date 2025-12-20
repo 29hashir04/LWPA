@@ -1,0 +1,14 @@
+[server]
+# Torch + Streamlit file watching can produce noisy errors on Windows (torch.classes/__path__).
+# Disabling the watcher makes runs more stable and reduces log spam for demos.
+fileWatcherType = "none"
+
+# Demo-friendly settings
+runOnSave = false
+headless = true
+
+[browser]
+gatherUsageStats = false
+
+
+
