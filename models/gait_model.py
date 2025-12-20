@@ -1,7 +1,7 @@
 """
 ╔══════════════════════════════════════════════════════════════════════════════╗
-║                    OPTIMIZED GAIT RECOGNITION MODEL                           ║
-║                                                                               ║
+║                    OPTIMIZED GAIT RECOGNITION MODEL                          ║
+║                                                                              ║
 ║  Production-grade, GPU-accelerated, real-time gait recognition pipeline      ║
 ║  - YOLOv8n-pose for 17-keypoint detection                                    ║
 ║  - 136-dimensional normalized gait features                                  ║

@@ -1,13 +1,13 @@
 """
 ╔══════════════════════════════════════════════════════════════════════════════╗
-║              LIVE WALKING PATTERN ANALYSIS (LWPA) - Production                ║
-║                                                                               ║
-║  Production-grade gait recognition system with:                               ║
-║  - GPU-accelerated YOLOv8 pose detection                                      ║
-║  - 136-dimensional normalized gait features                                   ║
-║  - Temporal smoothing with EMA + voting                                       ║
-║  - Firebase authentication with session persistence                           ║
-║  - Real-time 30+ FPS processing                                               ║
+║              LIVE WALKING PATTERN ANALYSIS (LWPA) - Production               ║
+║                                                                              ║
+║  Production-grade gait recognition system with:                              ║
+║  - GPU-accelerated YOLOv8 pose detection                                     ║
+║  - 136-dimensional normalized gait features                                  ║
+║  - Temporal smoothing with EMA + voting                                      ║
+║  - Firebase authentication with session persistence                          ║
+║  - Real-time 30+ FPS processing                                              ║
 ╚══════════════════════════════════════════════════════════════════════════════╝
 """
 

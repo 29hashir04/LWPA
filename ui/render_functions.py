@@ -1,12 +1,12 @@
 """
 ╔══════════════════════════════════════════════════════════════════════════════╗
-║                    OPTIMIZED UI RENDERING FUNCTIONS                           ║
-║                                                                               ║
-║  Production-grade Streamlit UI with:                                          ║
-║  - Optimized camera pipeline (30+ FPS)                                        ║
-║  - Smooth overlay transitions                                                 ║
-║  - Real-time performance metrics                                              ║
-║  - Robust error handling                                                      ║
+║                    OPTIMIZED UI RENDERING FUNCTIONS                          ║
+║                                                                              ║
+║  Production-grade Streamlit UI with:                                         ║
+║  - Optimized camera pipeline (30+ FPS)                                       ║
+║  - Smooth overlay transitions                                                ║
+║  - Real-time performance metrics                                             ║
+║  - Robust error handling                                                     ║
 ╚══════════════════════════════════════════════════════════════════════════════╝
 """
 
