@@ -1,12 +1,12 @@
 """
 ╔══════════════════════════════════════════════════════════════════════════════╗
-║                         GAIT DATA MANAGER                                     ║
-║                                                                               ║
-║  Production-grade data management with:                                       ║
-║  - User-isolated storage                                                      ║
-║  - Validation and sanitization                                                ║
-║  - Memory caching with TTL                                                    ║
-║  - Thread-safe operations                                                     ║
+║                         GAIT DATA MANAGER                                    ║
+║                                                                              ║
+║  Production-grade data management with:                                      ║
+║  - User-isolated storage                                                     ║
+║  - Validation and sanitization                                               ║
+║  - Memory caching with TTL                                                   ║
+║  - Thread-safe operations                                                    ║
 ╚══════════════════════════════════════════════════════════════════════════════╝
 """
 
