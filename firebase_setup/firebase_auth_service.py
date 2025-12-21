@@ -319,7 +319,7 @@ class FirebaseAuthService:
         try:
             firebase_auth.delete_user(user_id)
             self.db.collection(self.users_collection).document(user_id).delete()
-            
+
             gait_docs = self.db.collection(self.gait_data_collection).where('user_id', '==', user_id).stream()
             for doc in gait_docs:
                 doc.reference.delete()
@@ -547,7 +547,7 @@ def check_firebase_authentication():
     # Try to restore from URL if not authenticated
     logger.debug("Not authenticated, attempting session restore...")
     if _try_restore_session():
-        return True
+                    return True
     
     return False
 

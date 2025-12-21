@@ -1,12 +1,12 @@
 """
 ╔══════════════════════════════════════════════════════════════════════════════╗
-║                    OPTIMIZED UI RENDERING FUNCTIONS                           ║
-║                                                                               ║
-║  Production-grade Streamlit UI with:                                          ║
-║  - Optimized camera pipeline (30+ FPS)                                        ║
-║  - Smooth overlay transitions                                                 ║
-║  - Real-time performance metrics                                              ║
-║  - Robust error handling                                                      ║
+║                    OPTIMIZED UI RENDERING FUNCTIONS                          ║
+║                                                                              ║
+║  Production-grade Streamlit UI with:                                         ║
+║  - Optimized camera pipeline (30+ FPS)                                       ║
+║  - Smooth overlay transitions                                                ║
+║  - Real-time performance metrics                                             ║
+║  - Robust error handling                                                     ║
 ╚══════════════════════════════════════════════════════════════════════════════╝
 """
 
@@ -186,6 +186,53 @@ def render_performance_dashboard():
 
 
 # =============================================================================
+# RECOGNITION SETTINGS
+# =============================================================================
+
+def render_recognition_settings():
+    """
+    Real-time recognition threshold slider.
+    
+    Allows users to adjust matching sensitivity:
+    - Lower threshold = stricter matching (fewer false positives)
+    - Higher threshold = lenient matching (fewer false negatives)
+    """
+    st.markdown("### Recognition Settings")
+    
+    gait_model = st.session_state.get('gait_model')
+    
+    if not gait_model:
+        st.warning("Model not loaded")
+        return
+    
+    # Get current threshold from model
+    current_threshold = getattr(gait_model, 'distance_threshold', 18.0)
+    
+    # Threshold slider
+    new_threshold = st.slider(
+        "Matching Sensitivity",
+        min_value=5.0,
+        max_value=30.0,
+        value=float(current_threshold),
+        step=0.5,
+        help="Lower = stricter (high security), Higher = lenient (more forgiving)"
+    )
+    
+    # Apply threshold to model
+    if new_threshold != current_threshold:
+        gait_model.distance_threshold = new_threshold
+        st.session_state.gait_model = gait_model
+    
+    # Visual indicator
+    if new_threshold <= 10:
+        st.caption("Mode: **Strict** - High security, may reject valid users")
+    elif new_threshold <= 20:
+        st.caption("Mode: **Balanced** - Good accuracy and usability")
+    else:
+        st.caption("Mode: **Lenient** - More forgiving, may accept similar gaits")
+
+
+# =============================================================================
 # STATUS PANEL
 # =============================================================================
 
@@ -228,8 +275,8 @@ def render_optimized_main_application():
         st.markdown("## Live Walking Pattern Analysis")
     
     with col3:
-        from firebase_setup.firebase_auth_service import render_firebase_logout_button
-        render_firebase_logout_button()
+            from firebase_setup.firebase_auth_service import render_firebase_logout_button
+            render_firebase_logout_button()
     
     # GPU status banner
     if torch.cuda.is_available():
@@ -252,9 +299,11 @@ def render_optimized_main_application():
     with col_main:
         st.markdown("### Camera Feed")
         render_camera_section()
-    
+        
     with col_side:
         render_performance_dashboard()
+        st.markdown("---")
+        render_recognition_settings()
         st.markdown("---")
         render_status_panel()
 
@@ -287,7 +336,7 @@ def render_camera_section():
         if st.button("Stop Camera", disabled=stop_disabled):
             st.session_state.camera_running = False
             st.rerun()
-    
+        
     # Placeholders for camera feed and status
     frame_placeholder = st.empty()
     status_placeholder = st.empty()
@@ -466,7 +515,7 @@ def run_optimized_camera_loop(frame_placeholder, status_placeholder):
                 status_text += " | [!] Unknown Person"
             
             status_placeholder.info(status_text)
-            
+        
             # =================================================================
             # FRAME RATE CONTROL
             # =================================================================
@@ -475,7 +524,7 @@ def run_optimized_camera_loop(frame_placeholder, status_placeholder):
             frame_time = time.perf_counter() - loop_start
             sleep_time = max(0.001, 0.033 - frame_time)
             time.sleep(sleep_time)
-            
+        
     except Exception as e:
         logger.error(f"Camera loop error: {e}", exc_info=True)
         st.error(f"Camera error: {e}")
@@ -531,7 +580,7 @@ def process_frame_optimized(
         
         # Feature extraction
         features = gait_model.extract_gait_features_optimized(keypoints)
-        
+                
         if features is None:
             result['name'] = 'Processing...'
             return result
@@ -545,10 +594,10 @@ def process_frame_optimized(
         result['name'] = stable_name
         result['confidence'] = stable_conf
         result['is_stable'] = is_stable
-        
+                        
     except Exception as e:
         logger.error(f"Frame processing error: {e}")
-    
+
     return result
 
 
@@ -709,7 +758,7 @@ def render_optimized_enrollment_page():
     if not st.session_state.get("gait_model") or not st.session_state.get("data_manager"):
         st.error("Models not initialized. Please refresh the page.")
         return
-    
+        
     # Layout
     col1, col2 = st.columns([2, 1])
     
@@ -762,9 +811,9 @@ def render_optimized_enrollment_page():
     # =========================================================================
     
     st.markdown("---")
-    
+        
     col_a, col_b = st.columns(2)
-    
+        
     with col_a:
         if st.button("Start Auto Enrollment", type="primary", disabled=not bool(person_name)):
             st.session_state.enroll_session = {
@@ -777,7 +826,7 @@ def render_optimized_enrollment_page():
             }
             run_auto_enrollment(user_id)
             st.rerun()
-    
+        
     with col_b:
         if st.button("Reset", disabled=not session["active"]):
             st.session_state.enroll_session = {
@@ -789,7 +838,7 @@ def render_optimized_enrollment_page():
                 "features_list": [],
             }
             st.rerun()
-    
+        
     # =========================================================================
     # INSTRUCTIONS
     # =========================================================================

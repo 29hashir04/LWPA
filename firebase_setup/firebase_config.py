@@ -145,12 +145,12 @@ class FirebaseConfig:
             return self.pyrebase_app.auth()
         return None
 
-    def is_initialized(self) -> bool:
+    def is_initialized(self):
         """Check if Firebase is properly initialized"""
         return self.app is not None
 
 
-def get_firebase_config() -> FirebaseConfig:
+def get_firebase_config():
     """Get or create Firebase config singleton (thread-safe)"""
     global _firebase_config
     
@@ -180,7 +180,7 @@ def get_firebase_auth():
     return config.get_pyrebase_auth()
 
 
-def is_firebase_available() -> bool:
+def is_firebase_available():
     """Check if Firebase is available"""
     config = get_firebase_config()
     return config.is_initialized()

@@ -338,7 +338,7 @@ class GaitDataManager:
         except Exception as e:
             logger.warning(f"Failed to load {filepath}: {e}")
             return None
-    
+        
     # =========================================================================
     # DELETE OPERATIONS
     # =========================================================================

@@ -1,7 +1,18 @@
 """
-Firebase Gait Data Manager
-Handles gait data with user isolation.
+╔══════════════════════════════════════════════════════════════════════════════╗
+║                       FIREBASE GAIT DATA MANAGER                             ║
+║                                                                              ║
+║  User data management UI for:                                                ║
+║  - Viewing enrolled gait patterns                                            ║
+║  - Exporting data as JSON                                                    ║
+║  - Clearing all user data                                                    ║
+║  - Deleting individual patterns                                              ║
+╚══════════════════════════════════════════════════════════════════════════════╝
 """
+
+# =============================================================================
+# IMPORTS
+# =============================================================================
 import streamlit as st
 import numpy as np
 import json
@@ -9,16 +20,30 @@ import logging
 from typing import Dict, Any, Optional
 from datetime import datetime
 
+# =============================================================================
+# LOGGING CONFIGURATION
+# =============================================================================
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-EXPECTED_FEATURE_LEN = 136  # current model emits 34*4 features
+# =============================================================================
+# CONSTANTS
+# =============================================================================
+EXPECTED_FEATURE_LEN = 136  # Current model emits 34*4 features
 
+# =============================================================================
+# HELPER FUNCTIONS
+# =============================================================================
 
 def _coerce_features(features: Any) -> Optional[np.ndarray]:
     """
     Ensure we only work with real numeric feature vectors.
-    Returns a 1D float array, or None if invalid.
+    
+    Args:
+        features: Raw feature data (list, array, or other)
+    
+    Returns:
+        1D float32 array, or None if invalid
     """
     if features is None:
         return None
@@ -37,20 +62,41 @@ def _coerce_features(features: Any) -> Optional[np.ndarray]:
 def _is_plausible_feature_vector(arr: np.ndarray) -> bool:
     """
     Filters out obviously corrupt or placeholder vectors.
-    We do NOT enforce exact length, but we prefer the expected length.
+    
+    Args:
+        arr: Feature array to validate
+    
+    Returns:
+        True if vector appears valid, False otherwise
     """
     if arr is None or arr.size == 0:
         return False
-    # reject all-zeros (common sign of a failed capture)
+    # Reject all-zeros (common sign of a failed capture)
     if np.allclose(arr, 0.0):
         return False
     return True
 
 
+# =============================================================================
+# MAIN UI FUNCTION
+# =============================================================================
+
 def render_firebase_data_management():
-    """Data management UI"""
+    """
+    Render the 'My Data' tab UI.
+    
+    Features:
+    - Display enrolled pattern count and stats
+    - Export data as JSON
+    - Clear all data (with confirmation)
+    - Delete individual patterns
+    - Refresh cache
+    """
     st.markdown("### My Gait Data")
     
+    # -------------------------------------------------------------------------
+    # USER VALIDATION
+    # -------------------------------------------------------------------------
     user_data = st.session_state.get('user_data', {})
     user_id = st.session_state.get('user_id', '')
     
@@ -58,18 +104,22 @@ def render_firebase_data_management():
         st.warning("Please log in")
         return
     
-    # Use the SAME data manager as Enrollment/Recognition to avoid stale/duplicate behavior.
-    # Fall back to a new manager if it hasn't been initialized yet.
+    # -------------------------------------------------------------------------
+    # LOAD DATA MANAGER
+    # -------------------------------------------------------------------------
+    # Use the SAME data manager as Enrollment/Recognition to avoid stale/duplicate behavior
     from data.gait_data_manager import GaitDataManager
     manager = st.session_state.get("data_manager") or GaitDataManager()
-
+    
     enrolled = manager.load_user_gait_data(user_id)
     
     if not enrolled:
         st.info("No patterns enrolled. Go to 'Enroll' tab to add some!")
         return
     
-    # Stats
+    # -------------------------------------------------------------------------
+    # STATS DISPLAY
+    # -------------------------------------------------------------------------
     st.markdown(f"**{len(enrolled)} enrolled patterns**")
     col1, col2 = st.columns(2)
     col1.metric("Patterns", len(enrolled))
@@ -78,9 +128,12 @@ def render_firebase_data_management():
     
     st.markdown("---")
     
-    # Actions
+    # -------------------------------------------------------------------------
+    # ACTION BUTTONS
+    # -------------------------------------------------------------------------
     col_a, col_b, col_c = st.columns(3)
     
+    # Export button
     with col_a:
         if st.button("Export", key="export_btn"):
             export: Dict[str, Any] = {}
@@ -100,6 +153,7 @@ def render_firebase_data_management():
                 "application/json"
             )
     
+    # Clear all button
     with col_b:
         if 'confirm_clear' not in st.session_state:
             st.session_state.confirm_clear = False
@@ -127,6 +181,7 @@ def render_firebase_data_management():
                 st.session_state.confirm_clear = False
                 st.rerun()
     
+    # Refresh button
     with col_c:
         if st.button("Refresh"):
             try:
@@ -140,11 +195,13 @@ def render_firebase_data_management():
     
     st.markdown("---")
     
-    # Pattern list
+    # -------------------------------------------------------------------------
+    # PATTERN LIST
+    # -------------------------------------------------------------------------
     for name, features in enrolled.items():
         arr = _coerce_features(features)
         if not _is_plausible_feature_vector(arr):
-            # Shouldn't happen because load_user_gait_data filters already, but keep safe.
+            # Shouldn't happen because load_user_gait_data filters already
             continue
 
         with st.expander(f"{name}"):

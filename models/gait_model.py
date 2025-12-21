@@ -1,7 +1,7 @@
 """
 ╔══════════════════════════════════════════════════════════════════════════════╗
-║                    OPTIMIZED GAIT RECOGNITION MODEL                           ║
-║                                                                               ║
+║                    OPTIMIZED GAIT RECOGNITION MODEL                          ║
+║                                                                              ║
 ║  Production-grade, GPU-accelerated, real-time gait recognition pipeline      ║
 ║  - YOLOv8n-pose for 17-keypoint detection                                    ║
 ║  - 136-dimensional normalized gait features                                  ║
@@ -61,16 +61,16 @@ class GaitConfig:
     # -------------------------------------------------------------------------
     # TEMPORAL BUFFERING
     # -------------------------------------------------------------------------
-    POSE_BUFFER_SIZE: int = 45      # Frames to collect (~1.5 gait cycles at 30fps)
+    POSE_BUFFER_SIZE: int = 60      # Frames to collect (~1.5 gait cycles at 30fps)
     FEATURE_BUFFER_SIZE: int = 7    # Windows for feature averaging
     DECISION_BUFFER_SIZE: int = 7   # Votes for stable decision
     
     # -------------------------------------------------------------------------
     # RECOGNITION THRESHOLDS
     # -------------------------------------------------------------------------
-    DISTANCE_THRESHOLD: float = 5.5  # Max Euclidean distance for match
-    MIN_CONFIDENCE: float = 0.40     # Minimum confidence to show name
-    MIN_VOTES: int = 4               # Required votes for stable decision
+    DISTANCE_THRESHOLD: float = 18  # Max Euclidean distance for match
+    MIN_CONFIDENCE: float = 0.30     # Minimum confidence to show name
+    MIN_VOTES: int = 3               # Required votes for stable decision
     
     # -------------------------------------------------------------------------
     # FEATURE DIMENSIONS
@@ -265,7 +265,7 @@ class OptimizedFastPoseGaitModel:
                 self.pose_model.to(self.device)
                 
                 # Enable cuDNN autotuner for optimized convolutions
-                torch.backends.cudnn.benchmark = True
+                torch.backends.cudnn.benchmark = True  
                 torch.backends.cudnn.enabled = True
                 
                 # Enable TF32 for Ampere+ GPUs (faster matmul)
@@ -336,7 +336,7 @@ class OptimizedFastPoseGaitModel:
             
             # Ensure numpy array
             kp = np.asarray(keypoints, dtype=np.float32)
-            
+                
             # Extract x, y coordinates
             if kp.ndim == 1:
                 if kp.size == 34:
@@ -462,7 +462,7 @@ class OptimizedFastPoseGaitModel:
                     conf = conf.cpu().numpy()
                 else:
                     conf = np.asarray(conf)
-                
+            
                 # Vectorized confidence check
                 threshold = CONFIG.CONFIDENCE_THRESHOLD
                 
@@ -484,7 +484,7 @@ class OptimizedFastPoseGaitModel:
             
             # No confidence scores, assume full body if 17 keypoints exist
             return DetectionStatus.FULL_BODY.value, person_kp
-            
+                
         except Exception:
             return DetectionStatus.NO_PERSON.value, None
     
@@ -513,7 +513,7 @@ class OptimizedFastPoseGaitModel:
             normalized = self._normalize_pose(keypoints)
             
             if normalized is None or len(normalized) != CONFIG.POSE_DIM:
-                return None
+                    return None
             
             # Add to circular buffer
             self.pose_buffer.append(normalized)
@@ -675,7 +675,7 @@ class OptimizedFastPoseGaitModel:
             self.confidence_buffer.append(confidence)
             
             return decision, confidence
-            
+                
         except Exception as e:
             logger.error(f"Recognition error: {e}")
             return 'Unknown', 0.0
