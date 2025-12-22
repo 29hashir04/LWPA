@@ -5,7 +5,7 @@
 ║  Production-grade, GPU-accelerated, real-time gait recognition pipeline      ║
 ║  - YOLOv8n-pose for 17-keypoint detection                                    ║
 ║  - 136-dimensional normalized gait features                                  ║
-║  - Euclidean distance matching with adaptive thresholds                      ║
+║  - Cosine similarity matching with adaptive thresholds                       ║
 ║  - Temporal smoothing with EMA and voting                                    ║
 ╚══════════════════════════════════════════════════════════════════════════════╝
 """
@@ -68,9 +68,9 @@ class GaitConfig:
     # -------------------------------------------------------------------------
     # RECOGNITION THRESHOLDS
     # -------------------------------------------------------------------------
-    DISTANCE_THRESHOLD: float = 18  # Max Euclidean distance for match
-    MIN_CONFIDENCE: float = 0.30     # Minimum confidence to show name
-    MIN_VOTES: int = 3               # Required votes for stable decision
+    SIMILARITY_THRESHOLD: float = 0.70  # Min cosine similarity for match (0-1)
+    MIN_CONFIDENCE: float = 0.30        # Minimum confidence to show name
+    MIN_VOTES: int = 3                  # Required votes for stable decision
     
     # -------------------------------------------------------------------------
     # FEATURE DIMENSIONS
@@ -229,7 +229,7 @@ class OptimizedFastPoseGaitModel:
         # =====================================================================
         # RECOGNITION PARAMETERS
         # =====================================================================
-        self.distance_threshold = CONFIG.DISTANCE_THRESHOLD
+        self.similarity_threshold = CONFIG.SIMILARITY_THRESHOLD
         
         # =====================================================================
         # PERFORMANCE MONITORING
@@ -592,7 +592,7 @@ class OptimizedFastPoseGaitModel:
             return None
     
     # =========================================================================
-    # RECOGNITION (Distance-based with smoothing)
+    # RECOGNITION (Cosine similarity-based with smoothing)
     # =========================================================================
     
     def recognize_person_optimized(
@@ -601,11 +601,11 @@ class OptimizedFastPoseGaitModel:
         enrolled_data: Dict[str, np.ndarray]
     ) -> Tuple[str, float]:
         """
-        Recognize person using Euclidean distance with EMA smoothing.
+        Recognize person using cosine similarity with EMA smoothing.
         
         Pipeline:
         1. Apply EMA smoothing to features
-        2. Compute distance to each enrolled pattern
+        2. Compute cosine similarity to each enrolled pattern
         3. Find best match
         4. Apply threshold
         5. Update decision buffer
@@ -628,10 +628,18 @@ class OptimizedFastPoseGaitModel:
             # -----------------------------------------------------------------
             smoothed_features = self.feature_ema.update(features)
             
+            # Normalize for cosine similarity (convert to unit vector)
+            feature_norm = np.linalg.norm(smoothed_features)
+            if feature_norm < 1e-8:
+                logger.warning("Feature vector has zero norm")
+                return 'Unknown', 0.0
+            
+            normalized_features = smoothed_features / feature_norm
+            
             # -----------------------------------------------------------------
-            # DISTANCE COMPUTATION
+            # COSINE SIMILARITY COMPUTATION
             # -----------------------------------------------------------------
-            distances = []
+            similarities = []
             
             for person_name, enrolled_features in enrolled_data.items():
                 # Dimension check
@@ -639,34 +647,47 @@ class OptimizedFastPoseGaitModel:
                     logger.warning(f"Dimension mismatch for {person_name}")
                     continue
                 
-                # Euclidean distance
-                distance = np.linalg.norm(smoothed_features - enrolled_features)
-                distances.append((person_name, distance))
+                # Normalize enrolled features
+                enrolled_norm = np.linalg.norm(enrolled_features)
+                if enrolled_norm < 1e-8:
+                    logger.warning(f"Enrolled features for {person_name} have zero norm")
+                    continue
+                
+                normalized_enrolled = enrolled_features / enrolled_norm
+                
+                # Cosine similarity: dot product of normalized vectors
+                # Output range: [-1, 1], where 1 = identical, 0 = orthogonal, -1 = opposite
+                similarity = float(np.dot(normalized_features, normalized_enrolled))
+                
+                # Clamp to [0, 1] range (negative similarities treated as 0)
+                similarity = max(0.0, min(1.0, similarity))
+                
+                similarities.append((person_name, similarity))
             
-            if not distances:
+            if not similarities:
                 return 'Unknown', 0.0
             
             # -----------------------------------------------------------------
             # FIND BEST MATCH
             # -----------------------------------------------------------------
-            best_name, best_distance = min(distances, key=lambda x: x[1])
+            best_name, best_similarity = max(similarities, key=lambda x: x[1])
             
-            # Confidence: exponential decay based on distance
-            # confidence = exp(-distance / threshold) gives:
-            #   - distance=0 -> confidence=1.0
-            #   - distance=threshold -> confidence~0.37
-            #   - distance=2*threshold -> confidence~0.14
-            confidence = float(np.exp(-best_distance / self.distance_threshold))
+            # Confidence is directly the similarity score (already 0-1 range)
+            confidence = best_similarity
             
             # -----------------------------------------------------------------
             # THRESHOLD CHECK
             # -----------------------------------------------------------------
-            if best_distance <= self.distance_threshold:
+            if best_similarity >= self.similarity_threshold:
                 decision = best_name
-                logger.info(f"MATCH: {best_name} (dist={best_distance:.2f}, conf={confidence:.0%})")
+                # Log all comparisons when match found
+                all_scores = ', '.join([f"{name}={sim:.3f}" for name, sim in similarities])
+                logger.info(f"MATCH: {best_name} (similarity={best_similarity:.3f}, conf={confidence:.0%}) | All: [{all_scores}]")
             else:
                 decision = 'Unknown'
-                logger.info(f"NO MATCH: dist={best_distance:.2f} > {self.distance_threshold}")
+                # Log all comparisons when no match
+                all_scores = ', '.join([f"{name}={sim:.3f}" for name, sim in similarities])
+                logger.info(f"NO MATCH: similarity={best_similarity:.3f} < {self.similarity_threshold} | All: [{all_scores}]")
             
             # -----------------------------------------------------------------
             # DECISION SMOOTHING (Voting)
@@ -774,5 +795,5 @@ class OptimizedFastPoseGaitModel:
             'gpu_available': torch.cuda.is_available(),
             'gpu_name': torch.cuda.get_device_name() if torch.cuda.is_available() else 'N/A',
             'buffer_size': CONFIG.POSE_BUFFER_SIZE,
-            'threshold': self.distance_threshold
+            'similarity_threshold': self.similarity_threshold
         }

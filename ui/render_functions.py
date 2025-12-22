@@ -21,6 +21,10 @@ from typing import Dict, Any, Optional, Tuple
 from collections import deque, Counter
 from dataclasses import dataclass
 from enum import Enum
+from streamlit_webrtc import webrtc_streamer, WebRtcMode, RTCConfiguration
+import av
+import queue
+import threading
 
 # =============================================================================
 # LOGGING CONFIGURATION
@@ -206,27 +210,27 @@ def render_recognition_settings():
         return
     
     # Get current threshold from model
-    current_threshold = getattr(gait_model, 'distance_threshold', 18.0)
+    current_threshold = getattr(gait_model, 'similarity_threshold', 0.70)
     
     # Threshold slider
     new_threshold = st.slider(
         "Matching Sensitivity",
-        min_value=5.0,
-        max_value=30.0,
+        min_value=0.70,
+        max_value=0.95,
         value=float(current_threshold),
-        step=0.5,
-        help="Lower = stricter (high security), Higher = lenient (more forgiving)"
+        step=0.01,
+        help="Higher = stricter (high security), Lower = lenient (more forgiving)"
     )
     
     # Apply threshold to model
     if new_threshold != current_threshold:
-        gait_model.distance_threshold = new_threshold
+        gait_model.similarity_threshold = new_threshold
         st.session_state.gait_model = gait_model
     
     # Visual indicator
-    if new_threshold <= 10:
+    if new_threshold >= 0.90:
         st.caption("Mode: **Strict** - High security, may reject valid users")
-    elif new_threshold <= 20:
+    elif new_threshold >= 0.80:
         st.caption("Mode: **Balanced** - Good accuracy and usability")
     else:
         st.caption("Mode: **Lenient** - More forgiving, may accept similar gaits")
@@ -313,96 +317,16 @@ def render_optimized_main_application():
 # =============================================================================
 
 def render_camera_section():
-    """Camera controls and feed with state management"""
+    """Camera controls and feed with WebRTC"""
     
-    # Initialize camera state
-    if 'camera_running' not in st.session_state:
-        st.session_state.camera_running = False
-    
-    # Control buttons
-    col1, col2 = st.columns(2)
-    
-    with col1:
-        start_disabled = st.session_state.camera_running
-        if st.button("Start Camera", type="primary", disabled=start_disabled):
-            st.session_state.camera_running = True
-            # Reset model buffers for fresh recognition
-            if st.session_state.get('gait_model'):
-                st.session_state.gait_model.reset_buffers()
-            st.rerun()
-    
-    with col2:
-        stop_disabled = not st.session_state.camera_running
-        if st.button("Stop Camera", disabled=stop_disabled):
-            st.session_state.camera_running = False
-            st.rerun()
-        
-    # Placeholders for camera feed and status
-    frame_placeholder = st.empty()
-    status_placeholder = st.empty()
-    
-    if st.session_state.camera_running:
-        run_optimized_camera_loop(frame_placeholder, status_placeholder)
-    else:
-        # Show placeholder image
-        placeholder_img = np.zeros((360, 640, 3), dtype=np.uint8)
-        cv2.putText(placeholder_img, "Click 'Start Camera' to begin", 
-                    (120, 180), cv2.FONT_HERSHEY_SIMPLEX, 0.8, (100, 100, 100), 2)
-        _image(frame_placeholder, placeholder_img, channels="BGR")
-        status_placeholder.info("Camera ready. Click Start to begin recognition.")
-
-
-# =============================================================================
-# OPTIMIZED CAMERA LOOP
-# =============================================================================
-
-def run_optimized_camera_loop(frame_placeholder, status_placeholder):
-    """
-    High-performance camera loop with:
-    - Optimized OpenCV capture
-    - Minimal latency pipeline
-    - Smooth overlay rendering
-    - Real-time metrics
-    """
-    
-    # =========================================================================
-    # CAMERA INITIALIZATION
-    # =========================================================================
-    
-    # Try DirectShow backend on Windows for lower latency
-    cap = cv2.VideoCapture(0, cv2.CAP_DSHOW) if hasattr(cv2, 'CAP_DSHOW') else cv2.VideoCapture(0)
-    
-    if not cap.isOpened():
-        st.error("Could not open camera. Check if another app is using it.")
-        st.session_state.camera_running = False
-        return
-    
-    # Optimize camera settings
-    cap.set(cv2.CAP_PROP_FRAME_WIDTH, UI_CONFIG.CAMERA_WIDTH)
-    cap.set(cv2.CAP_PROP_FRAME_HEIGHT, UI_CONFIG.CAMERA_HEIGHT)
-    cap.set(cv2.CAP_PROP_FPS, UI_CONFIG.TARGET_FPS)
-    cap.set(cv2.CAP_PROP_BUFFERSIZE, UI_CONFIG.CAMERA_BUFFER_SIZE)  # Minimize buffer
-    
-    # Disable auto-exposure for consistent performance (optional)
-    # cap.set(cv2.CAP_PROP_AUTO_EXPOSURE, 0.25)
-    
-    # =========================================================================
-    # GET USER AND ENROLLED DATA
-    # =========================================================================
-    
+    # Get user and enrolled data
     user_data = get_current_user()
     user_id = user_data.get('localId', '') if user_data else ''
     
-    gait_model = st.session_state.gait_model
-    data_manager = st.session_state.data_manager
+    gait_model = st.session_state.get('gait_model')
+    data_manager = st.session_state.get('data_manager')
     
-    # Reset buffers for fresh start
-    gait_model.reset_buffers()
-    
-    # =========================================================================
-    # ENROLLED DATA CACHE
-    # =========================================================================
-    
+    # Initialize enrolled cache
     if "enrolled_cache" not in st.session_state:
         st.session_state.enrolled_cache = {}
         st.session_state.enrolled_cache_user = ""
@@ -422,117 +346,110 @@ def run_optimized_camera_loop(frame_placeholder, status_placeholder):
     
     enrolled_data = st.session_state.enrolled_cache
     
-    # =========================================================================
-    # OVERLAY STATE TRACKING
-    # =========================================================================
-    
-    overlay_state = OverlayState.IDLE
-    current_name = ""
-    current_confidence = 0.0
-    state_lock_frames = 0  # Frames to lock current state (prevents flicker)
-    
-    # =========================================================================
-    # STOP BUTTON
-    # =========================================================================
-    
-    stop_btn = st.button("Stop", key="stop_loop_btn")
-    
-    # =========================================================================
-    # MAIN LOOP
-    # =========================================================================
-    
-    frame_count = 0
-    start_time = time.time()
-    last_frame_time = time.perf_counter()
-    
-    try:
-        while st.session_state.camera_running and not stop_btn:
-            loop_start = time.perf_counter()
+    # Thread-safe frame processor class
+    class FrameProcessor:
+        def __init__(self):
+            self.overlay_state = OverlayState.IDLE
+            self.current_name = ""
+            self.current_confidence = 0.0
+            self.lock_frames = 0
+            self.frame_count = 0
+            self.start_time = time.time()
             
-            # Read frame
-            ret, frame = cap.read()
+        def process(self, frame: av.VideoFrame):
+            """Process each video frame from WebRTC"""
+            # Convert to numpy array (BGR format from av)
+            img = frame.to_ndarray(format="bgr24")
             
-            if not ret:
-                logger.warning("Frame read failed")
-                time.sleep(0.01)
-                continue
+            # Mirror for natural feel
+            img = cv2.flip(img, 1)
             
-            # Mirror frame for natural feel
-            frame = cv2.flip(frame, 1)
-            frame_count += 1
+            # Update stats
+            self.frame_count += 1
             
-            # =================================================================
-            # FRAME PROCESSING
-            # =================================================================
+            # Process frame
+            result = process_frame_optimized(img, enrolled_data, gait_model)
             
-            result = process_frame_optimized(frame, enrolled_data, gait_model)
-            
-            # =================================================================
-            # OVERLAY STATE MACHINE (Prevents flicker)
-            # =================================================================
-            
+            # Update overlay state
             new_state, new_name, new_conf = determine_overlay_state(result)
             
-            # Lock state for a few frames to prevent rapid changes
-            if state_lock_frames > 0:
-                state_lock_frames -= 1
+            # Lock state for a few frames to prevent flicker
+            if self.lock_frames > 0:
+                self.lock_frames -= 1
             else:
-                if new_state != overlay_state or new_name != current_name:
-                    overlay_state = new_state
-                    current_name = new_name
-                    current_confidence = new_conf
-                    state_lock_frames = 3  # Lock for 3 frames
+                if new_state != self.overlay_state or new_name != self.current_name:
+                    self.overlay_state = new_state
+                    self.current_name = new_name
+                    self.current_confidence = new_conf
+                    self.lock_frames = 3
                 else:
                     # Smooth confidence update
-                    current_confidence = 0.8 * current_confidence + 0.2 * new_conf
+                    self.current_confidence = 0.8 * self.current_confidence + 0.2 * new_conf
             
-            # =================================================================
-            # DRAW OVERLAY
-            # =================================================================
-            
+            # Draw overlay
             frame_with_overlay = draw_optimized_overlay(
-                frame, 
-                overlay_state, 
-                current_name, 
-                current_confidence,
+                img,
+                self.overlay_state,
+                self.current_name,
+                self.current_confidence,
                 result['status']
             )
             
-            # =================================================================
-            # DISPLAY
-            # =================================================================
-            
-            _image(frame_placeholder, frame_with_overlay, channels="BGR")
-            
-            # Status bar
-            elapsed = time.time() - start_time
-            fps = frame_count / elapsed if elapsed > 0 else 0
-            
-            status_text = f"FPS: {fps:.1f} | Status: {result['status']}"
-            if overlay_state == OverlayState.RECOGNIZED:
-                status_text += f" | [OK] {current_name} ({current_confidence:.0%})"
-            elif overlay_state == OverlayState.UNKNOWN:
-                status_text += " | [!] Unknown Person"
-            
-            status_placeholder.info(status_text)
+            # Convert back to VideoFrame
+            return av.VideoFrame.from_ndarray(frame_with_overlay, format="bgr24")
+    
+    # Initialize processor
+    if 'frame_processor' not in st.session_state:
+        st.session_state.frame_processor = FrameProcessor()
+    
+    processor = st.session_state.frame_processor
+    
+    # WebRTC configuration
+    rtc_configuration = RTCConfiguration(
+        {"iceServers": [{"urls": ["stun:stun.l.google.com:19302"]}]}
+    )
+    
+    # Display WebRTC streamer with error handling
+    try:
+        webrtc_ctx = webrtc_streamer(
+            key="gait-recognition",
+            mode=WebRtcMode.SENDRECV,
+            rtc_configuration=rtc_configuration,
+            video_frame_callback=processor.process,
+            media_stream_constraints={"video": {"width": 640, "height": 480}, "audio": False},
+            async_processing=True,
+        )
         
-            # =================================================================
-            # FRAME RATE CONTROL
-            # =================================================================
+        # Status display
+        if webrtc_ctx.state.playing:
+            elapsed = time.time() - processor.start_time
+            fps = processor.frame_count / elapsed if elapsed > 0 else 0
             
-            # Target ~30 FPS (33ms per frame)
-            frame_time = time.perf_counter() - loop_start
-            sleep_time = max(0.001, 0.033 - frame_time)
-            time.sleep(sleep_time)
-        
-    except Exception as e:
-        logger.error(f"Camera loop error: {e}", exc_info=True)
-        st.error(f"Camera error: {e}")
-        
-    finally:
-        cap.release()
-        st.session_state.camera_running = False
-        logger.info(f"Camera stopped. Processed {frame_count} frames.")
+            status_text = f"FPS: {fps:.1f}"
+            
+            if processor.overlay_state == OverlayState.RECOGNIZED:
+                status_text += f" | ✅ {processor.current_name} ({processor.current_confidence:.0%})"
+                st.success(status_text)
+            elif processor.overlay_state == OverlayState.UNKNOWN:
+                status_text += " | ⚠️ Unknown Person"
+                st.warning(status_text)
+            else:
+                st.info(status_text)
+        else:
+            st.info("Click 'START' to begin camera recognition")
+    except KeyError as e:
+        # Handle streamlit-webrtc internal state errors
+        if "frontend" in str(e):
+            st.info("Initializing camera... Please refresh if this persists.")
+        else:
+            raise
+
+
+# =============================================================================
+# LEGACY CAMERA LOOP (REPLACED BY WEBRTC)
+# =============================================================================
+# The old cv2.VideoCapture loop has been replaced with WebRTC streaming
+# for web deployment compatibility. See video_frame_callback in render_camera_section()
 
 
 # =============================================================================
@@ -815,7 +732,7 @@ def render_optimized_enrollment_page():
     col_a, col_b = st.columns(2)
         
     with col_a:
-        if st.button("Start Auto Enrollment", type="primary", disabled=not bool(person_name)):
+        if st.button("Start Auto Enrollment", type="primary", disabled=not bool(person_name) or session["active"]):
             st.session_state.enroll_session = {
                 "active": True,
                 "person_name": person_name.strip(),
@@ -824,7 +741,6 @@ def render_optimized_enrollment_page():
                 "timeout_s": int(sequence_timeout),
                 "features_list": [],
             }
-            run_auto_enrollment(user_id)
             st.rerun()
         
     with col_b:
@@ -837,7 +753,17 @@ def render_optimized_enrollment_page():
                 "timeout_s": UI_CONFIG.DEFAULT_TIMEOUT_S,
                 "features_list": [],
             }
+            # Clear enrollment processor
+            if 'enrollment_processor' in st.session_state:
+                del st.session_state.enrollment_processor
             st.rerun()
+    
+    # =========================================================================
+    # RUN ENROLLMENT IF ACTIVE
+    # =========================================================================
+    
+    if session["active"]:
+        run_auto_enrollment(user_id)
         
     # =========================================================================
     # INSTRUCTIONS
@@ -863,7 +789,7 @@ def render_optimized_enrollment_page():
 
 def run_auto_enrollment(user_id: str):
     """
-    One-click auto enrollment with progress tracking.
+    WebRTC-based auto enrollment with progress tracking.
     Captures multiple gait sequences automatically.
     """
     session = st.session_state.enroll_session
@@ -873,142 +799,147 @@ def run_auto_enrollment(user_id: str):
     person_name = session.get("person_name", "").strip()
     target_sequences = int(session.get("target_sequences", 8))
     frames_needed = int(session.get("frames_per_sequence", 45))
-    per_seq_timeout = int(session.get("timeout_s", 20))
     
     if not person_name:
         st.error("Please enter a person name.")
         return
     
+    # Thread-safe enrollment processor
+    class EnrollmentProcessor:
+        def __init__(self):
+            self.features_list = []
+            self.current_poses = []
+            self.status_message = 'Initializing...'
+            self.progress = 0.0
+            self.is_complete = False
+            
+        def process(self, frame: av.VideoFrame):
+            """Process enrollment frames"""
+            img = frame.to_ndarray(format="bgr24")
+            img = cv2.flip(img, 1)
+            
+            # Create progress overlay
+            progress_frame = img.copy()
+            
+            if not self.is_complete:
+                # Detect pose
+                batch_results = gait_model.detect_person_status_batch([img])
+                
+                if batch_results:
+                    status, keypoints = batch_results[0]
+                    
+                    if keypoints is not None:
+                        normalized = gait_model._normalize_pose(keypoints)
+                        
+                        if normalized is not None and len(normalized) == 34:
+                            self.current_poses.append(normalized.astype(np.float32))
+                            self.status_message = f"Capturing... {len(self.current_poses)}/{frames_needed} frames"
+                            
+                            # Check if we have enough frames for a sequence
+                            if len(self.current_poses) >= frames_needed:
+                                # Compute features
+                                sequence = np.stack(self.current_poses[-frames_needed:], axis=0)
+                                features = gait_model.compute_features_from_sequence(sequence)
+                                
+                                if features is not None and np.isfinite(features).all() and not np.allclose(features, 0):
+                                    self.features_list.append(features)
+                                    self.current_poses = []
+                                    self.progress = len(self.features_list) / target_sequences
+                                    self.status_message = f"Sequence {len(self.features_list)}/{target_sequences} captured!"
+                                    
+                                    # Check if enrollment complete
+                                    if len(self.features_list) >= target_sequences:
+                                        self.is_complete = True
+                                        self.status_message = "Enrollment complete!"
+                                else:
+                                    self.current_poses = []
+                                    self.status_message = "Invalid sequence, retrying..."
+                        else:
+                            self.status_message = "Keep full body visible"
+                    else:
+                        self.status_message = "No person detected"
+            
+            # Draw progress bar
+            seq_count = len(self.features_list)
+            cv2.rectangle(progress_frame, (0, 0), (640, 50), 
+                         (0, 100, 0) if not self.is_complete else (0, 200, 0), -1)
+            cv2.putText(progress_frame, 
+                       f"Sequence {seq_count}/{target_sequences} | Frames: {len(self.current_poses)}/{frames_needed}",
+                       (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 255), 2)
+            
+            return av.VideoFrame.from_ndarray(progress_frame, format="bgr24")
+    
+    # Initialize processor
+    if 'enrollment_processor' not in st.session_state:
+        st.session_state.enrollment_processor = EnrollmentProcessor()
+    
+    processor = st.session_state.enrollment_processor
+    
     # =========================================================================
-    # UI ELEMENTS
+    # WEBRTC STREAMER
     # =========================================================================
     
     st.info(f"Enrolling **{person_name}** - Walk naturally in front of the camera")
-    progress_bar = st.progress(0.0)
-    status_text = st.empty()
-    frame_display = st.empty()
     
-    # =========================================================================
-    # CAMERA SETUP
-    # =========================================================================
-    
-    cap = cv2.VideoCapture(0, cv2.CAP_DSHOW) if hasattr(cv2, 'CAP_DSHOW') else cv2.VideoCapture(0)
-    
-    if not cap.isOpened():
-        st.error("Could not open camera.")
-        return
-    
-    cap.set(cv2.CAP_PROP_FRAME_WIDTH, UI_CONFIG.CAMERA_WIDTH)
-    cap.set(cv2.CAP_PROP_FRAME_HEIGHT, UI_CONFIG.CAMERA_HEIGHT)
-    cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
-    
-    features_list = []
-    overall_start = time.time()
-    overall_timeout = max(120, target_sequences * per_seq_timeout * 2)
+    rtc_configuration = RTCConfiguration(
+        {"iceServers": [{"urls": ["stun:stun.l.google.com:19302"]}]}
+    )
     
     try:
-        while len(features_list) < target_sequences:
-            # Overall timeout check
-            if time.time() - overall_start > overall_timeout:
-                st.error("Enrollment timed out. Try fewer sequences or better lighting.")
-                return
-            
-            # Collect one sequence
-            poses = []
-            seq_start = time.time()
-            
-            status_text.info(f"Capturing sequence {len(features_list) + 1}/{target_sequences}...")
-            
-            while len(poses) < frames_needed:
-                # Sequence timeout
-                if time.time() - seq_start > per_seq_timeout:
-                    status_text.warning("Sequence timeout. Retrying...")
-                    poses.clear()
-                    seq_start = time.time()
-                    continue
-                
-                ret, frame = cap.read()
-                if not ret:
-                    continue
-                
-                frame = cv2.flip(frame, 1)
-                
-                # Draw progress on frame
-                progress_frame = frame.copy()
-                cv2.rectangle(progress_frame, (0, 0), (640, 40), (0, 100, 0), -1)
-                cv2.putText(progress_frame, 
-                           f"Sequence {len(features_list)+1}/{target_sequences} | Poses: {len(poses)}/{frames_needed}",
-                           (10, 28), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 255), 2)
-                
-                _image(frame_display, progress_frame, channels="BGR")
-                
-                # Detect pose
-                batch_results = gait_model.detect_person_status_batch([frame])
-                
-                if not batch_results:
-                    continue
-                
-                status, keypoints = batch_results[0]
-                
-                if keypoints is None:
-                    status_text.info("No person detected. Stand in front of camera.")
-                    continue
-                
-                # Normalize pose
-                normalized = gait_model._normalize_pose(keypoints)
-                
-                if normalized is None or len(normalized) != 34:
-                    status_text.info("Keep walking with full body visible...")
-                    continue
-                
-                poses.append(normalized.astype(np.float32))
-                
-            # Compute features from sequence
-            sequence = np.stack(poses[-frames_needed:], axis=0)
-            features = gait_model.compute_features_from_sequence(sequence)
-            
-            if features is None or not np.isfinite(features).all() or np.allclose(features, 0):
-                status_text.warning("Invalid features. Retrying sequence...")
-                continue
-            
-            features_list.append(features)
-            progress_bar.progress(len(features_list) / target_sequences)
-            status_text.success(f"Captured sequence {len(features_list)}/{target_sequences}")
-            
-            # Brief pause between sequences
-            time.sleep(0.5)
+        webrtc_ctx = webrtc_streamer(
+            key="enrollment-camera",
+            mode=WebRtcMode.SENDRECV,
+            rtc_configuration=rtc_configuration,
+            video_frame_callback=processor.process,
+            media_stream_constraints={"video": {"width": 640, "height": 480}, "audio": False},
+            async_processing=True,
+        )
+        
+        # =====================================================================
+        # STATUS DISPLAY
+        # =====================================================================
+        
+        progress_bar = st.progress(processor.progress)
+        st.info(processor.status_message)
         
         # =====================================================================
         # SAVE ENROLLMENT
         # =====================================================================
         
-        final_features = np.mean(np.array(features_list), axis=0)
-        data_manager.save_gait_data(user_id, person_name, final_features)
-        
-        st.success(f"Successfully enrolled **{person_name}**!")
-        logger.info(f"Enrollment complete: {person_name} ({target_sequences} sequences)")
-        
-        # Reset session
-        st.session_state.enroll_session = {
-            "active": False,
-            "person_name": "",
-            "target_sequences": UI_CONFIG.DEFAULT_SEQUENCES,
-            "frames_per_sequence": UI_CONFIG.DEFAULT_FRAMES_PER_SEQ,
-            "timeout_s": UI_CONFIG.DEFAULT_TIMEOUT_S,
-            "features_list": [],
-        }
-        
-        # Invalidate cache
-        if st.session_state.get("enrolled_cache_user") == user_id:
-            st.session_state.enrolled_cache = {}
-            st.session_state.enrolled_cache_ts = 0.0
-        
-    except Exception as e:
-        logger.error(f"Enrollment error: {e}", exc_info=True)
-        st.error(f"Enrollment failed: {e}")
-        
-    finally:
-        cap.release()
+        if processor.is_complete and len(processor.features_list) >= target_sequences:
+            final_features = np.mean(np.array(processor.features_list), axis=0)
+            data_manager.save_gait_data(user_id, person_name, final_features)
+            
+            st.success(f"Successfully enrolled **{person_name}**!")
+            logger.info(f"Enrollment complete: {person_name} ({target_sequences} sequences)")
+            
+            # Reset enrollment session
+            st.session_state.enroll_session = {
+                "active": False,
+                "person_name": "",
+                "target_sequences": UI_CONFIG.DEFAULT_SEQUENCES,
+                "frames_per_sequence": UI_CONFIG.DEFAULT_FRAMES_PER_SEQ,
+                "timeout_s": UI_CONFIG.DEFAULT_TIMEOUT_S,
+                "features_list": [],
+            }
+            
+            # Clear enrollment processor
+            if 'enrollment_processor' in st.session_state:
+                del st.session_state.enrollment_processor
+            
+            # Invalidate cache
+            if st.session_state.get("enrolled_cache_user") == user_id:
+                st.session_state.enrolled_cache = {}
+                st.session_state.enrolled_cache_ts = 0.0
+            
+            time.sleep(2)
+            st.rerun()
+    except KeyError as e:
+        # Handle streamlit-webrtc internal state errors
+        if "frontend" in str(e):
+            st.info("Initializing enrollment camera... Please refresh if this persists.")
+        else:
+            raise
 
 
 # =============================================================================
