@@ -404,9 +404,27 @@ def render_camera_section():
     
     processor = st.session_state.frame_processor
     
-    # WebRTC configuration
+    # WebRTC configuration with STUN and TURN servers for ngrok/external access
+    # TURN servers provide relay fallback when direct peer connection fails
     rtc_configuration = RTCConfiguration(
-        {"iceServers": [{"urls": ["stun:stun.l.google.com:19302"]}]}
+        {"iceServers": [
+            # Google STUN servers for NAT traversal
+            {"urls": ["stun:stun.l.google.com:19302"]},
+            {"urls": ["stun:stun1.l.google.com:19302"]},
+            # Free public TURN servers for relay (when STUN fails)
+            {
+                "urls": ["turn:openrelay.metered.ca:80"],
+                "username": "openrelayproject",
+                "credential": "openrelayproject"
+            },
+            {
+                "urls": ["turn:openrelay.metered.ca:443"],
+                "username": "openrelayproject",
+                "credential": "openrelayproject"
+            },
+        ],
+        "iceCandidatePoolSize": 10,  # Generate more ICE candidates
+        }
     )
     
     # Display WebRTC streamer with error handling
@@ -437,10 +455,12 @@ def render_camera_section():
                 st.info(status_text)
         else:
             st.info("Click 'START' to begin camera recognition")
-    except KeyError as e:
-        # Handle streamlit-webrtc internal state errors
-        if "frontend" in str(e):
-            st.info("Initializing camera... Please refresh if this persists.")
+    except (KeyError, AttributeError, RuntimeError) as e:
+        # Handle streamlit-webrtc errors (Python 3.13 compatibility issues)
+        error_msg = str(e)
+        if any(keyword in error_msg for keyword in ["frontend", "is_alive", "event loop", "NoneType"]):
+            st.warning("⚠️ Camera initialization issue (Python 3.13 compatibility). Please use Python 3.11 for best results.")
+            st.info("The app is running but WebRTC may have errors. Consider downgrading to Python 3.11.")
         else:
             raise
 
@@ -881,8 +901,24 @@ def run_auto_enrollment(user_id: str):
     
     st.info(f"Enrolling **{person_name}** - Walk naturally in front of the camera")
     
+    # WebRTC configuration with STUN and TURN servers for ngrok/external access
     rtc_configuration = RTCConfiguration(
-        {"iceServers": [{"urls": ["stun:stun.l.google.com:19302"]}]}
+        {"iceServers": [
+            {"urls": ["stun:stun.l.google.com:19302"]},
+            {"urls": ["stun:stun1.l.google.com:19302"]},
+            {
+                "urls": ["turn:openrelay.metered.ca:80"],
+                "username": "openrelayproject",
+                "credential": "openrelayproject"
+            },
+            {
+                "urls": ["turn:openrelay.metered.ca:443"],
+                "username": "openrelayproject",
+                "credential": "openrelayproject"
+            },
+        ],
+        "iceCandidatePoolSize": 10,
+        }
     )
     
     try:
@@ -934,10 +970,12 @@ def run_auto_enrollment(user_id: str):
             
             time.sleep(2)
             st.rerun()
-    except KeyError as e:
-        # Handle streamlit-webrtc internal state errors
-        if "frontend" in str(e):
-            st.info("Initializing enrollment camera... Please refresh if this persists.")
+    except (KeyError, AttributeError, RuntimeError) as e:
+        # Handle streamlit-webrtc errors (Python 3.13 compatibility issues)
+        error_msg = str(e)
+        if any(keyword in error_msg for keyword in ["frontend", "is_alive", "event loop", "NoneType"]):
+            st.warning("⚠️ Enrollment camera issue (Python 3.13 compatibility). Please use Python 3.11 for best results.")
+            st.info("WebRTC may have errors. Consider downgrading to Python 3.11 for stable operation.")
         else:
             raise
 
